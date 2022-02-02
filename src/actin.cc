@@ -13,4 +13,10 @@
 // -----------------------------------------------------------------------------
 #include "actin.h"
 
+namespace bdm {
+
+const ParamGroupUid SimParam::kUid = ParamGroupUidGenerator::Get()->NewUid();
+
+}
+
 int main(int argc, const char** argv) { return bdm::Simulate(argc, argv); }
