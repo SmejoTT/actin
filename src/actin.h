@@ -74,8 +74,8 @@ struct SimParam : public ParamGroup {
   double Arp_Sc  = ArpBR * dt;
   int nStartFils = 1;
   double FArpN  = nStartFils;
-  double GArpN = 9 / 1e6 * 6e23 * SpyV;
-  double GArpN0 = ceil(GArpN);
+  double GArpN0 = 9 / 1e6 * 6e23 * SpyV;
+  double GArpN = ceil(GArpN0);
   double Arp_uM = GArpN / SpyV *(1/6e23)*1e6;
 
   double ArpAdd = 5;
@@ -113,7 +113,7 @@ struct SimParam : public ParamGroup {
   // Constants
   int TOTAL_ACTIN     = GActinN + FActinN + THYM_ACT_N;
   int TOTAL_THYMOSIN  = THYM_N + THYM_ACT_N;
-  int TOTAL_ARP       = GArpN0 + FArpN;
+  int TOTAL_ARP       = GArpN + FArpN;
   int TOTAL_COFILIN   = N0_Cofilin;
   int timeStep = 1;
   int ThymTimeStart = 12000;
@@ -190,27 +190,29 @@ struct Polymerization : public Behavior {
     auto* filament = bdm_static_cast<NeuriteElement*>(agent);
     auto ZbotOut = filament->DistalEnd()[2] < 0;
 
+    if (filament->GetDaughterLeft()!= nullptr) return;
+
     if (sim->GetScheduler()->GetSimulatedSteps() < P->ACTearly){
       //std::cout << "early" << std::endl;
       if (fKa > random && TipOk(filament) && (P->GActinN > 1)){
         if (fKa > P->FArpN){
-          filament->ElongateTerminalEnd(2*2.71, filament->GetAxis());
+          filament->ElongateTerminalEnd(2*2.71, filament->GetSpringAxis());
           P->FActinN += 2;
           P->GActinN -= 2;
         } else {
-          filament->ElongateTerminalEnd(2.71, filament->GetAxis());
+          filament->ElongateTerminalEnd(2.71, filament->GetSpringAxis());
           P->FActinN += 1;
           P->GActinN -= 1;
         }
       }
     } else {
-      if ((fKa - LO(filament) > random) && !ZbotOut && (P->GActinN > 1)) {
+      if ((fKa - LO(filament) > random) && !ZbotOut && (P->GActinN > 1) && TipOk(filament)) {
         if (fKa > P->FArpN){
-          filament->ElongateTerminalEnd(2*2.71, filament->GetAxis());
+          filament->ElongateTerminalEnd(2*2.71, filament->GetSpringAxis());
           P->FActinN += 2;
           P->GActinN -= 2;
         } else {
-          filament->ElongateTerminalEnd(2.71, filament->GetAxis());
+          filament->ElongateTerminalEnd(2.71, filament->GetSpringAxis());
           P->FActinN += 1;
           P->GActinN -= 1;
         }
@@ -297,10 +299,21 @@ struct Depolymerization : public Behavior {
     auto* filament = bdm_static_cast<NeuriteElement*>(agent);
     
     if (filament->GetDaughterLeft() != nullptr) return;
-    if (filament->GetLength()< 5.40) return;
 
     if (P->fKd > random->Uniform(0,1)) {
-      filament->RetractTerminalEnd(2.71);
+      if (filament->GetLength() < 5.42) {
+        auto mother = dynamic_cast<NeuriteElement*>(filament->GetMother().Get());
+        auto ptr = filament->GetAgentPtr<NeuriteElement>();
+        auto left_daughter = mother->GetDaughterLeft();
+        if (ptr == left_daughter){
+          mother->RemoveDaughter(left_daughter);
+          filament->RemoveFromSimulation();
+          P->GArpN+=1;
+          P->FArpN-=1;
+        }
+      }else {
+        filament->RetractTerminalEnd(2.71);
+      }
       P->FActinN-=1;
       P->GActinN+=1;
     }
