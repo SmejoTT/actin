@@ -9,16 +9,18 @@
         "random_seed": 2688649975,
         "export_visualization": true,
         "simulation_time_step": 1,
-        "visualization_interval": 1,
+        "visualization_interval": 1000,
+        "thread_safety_mechanism": 1,
         "visualize_agents": {
             "NeuriteElement": [],
-            "NeuronSoma": []
+            "NeuronSoma": [],
+            "Filament": []
         }
     },
     "bdm::neuroscience::Param": {
         "neurite_default_actual_length": 2.71,
         "neurite_default_diameter": 7,
-        "neurite_min_length": 2.71,
+        "neurite_min_length": 2,
         "neurite_max_length": 32000
     }
 }

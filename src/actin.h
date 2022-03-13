@@ -16,8 +16,21 @@
 
 #include "biodynamo.h"
 #include "neuroscience/neuroscience.h"
+#include "core/operation/mechanical_forces_op.h"
 
 namespace bdm {
+
+class MyInteractionForce : public InteractionForce {
+  public:
+    MyInteractionForce() {}
+    virtual ~MyInteractionForce() {}
+    
+    Double4 Calculate(const Agent* lhs, const Agent* rhs) const override {
+        return {0,0,0,0};
+    }
+    
+    InteractionForce* NewCopy() const override { return new MyInteractionForce(); }
+};
 
 struct SimParam : public ParamGroup {
   BDM_PARAM_GROUP_HEADER(SimParam, 1);
@@ -180,6 +193,14 @@ struct Polymerization : public Behavior {
     return LngOut / 100 * P->mempressure;
   }
 
+  void AddActin(NeuriteElement* filament){
+    auto perp_vector = filament->GetSpringAxis();
+    filament->Bifurcate(2.71,7,7,filament->GetSpringAxis(),perp_vector);
+    auto ptr = filament->GetDaughterRight();
+    filament->RemoveDaughter(filament->GetDaughterRight());
+    ptr.Get()->RemoveFromSimulation();
+  }
+
   void Run(Agent* agent) override {
     //std::cout << "Poly" << std::endl;
     auto* sim = Simulation::GetActive();
@@ -196,11 +217,12 @@ struct Polymerization : public Behavior {
       //std::cout << "early" << std::endl;
       if (fKa > random && TipOk(filament) && (P->GActinN > 1)){
         if (fKa > P->FArpN){
-          filament->ElongateTerminalEnd(2*2.71, filament->GetSpringAxis());
+          AddActin(filament);
+          AddActin(const_cast<NeuriteElement*>(filament->GetDaughterLeft().Get()));
           P->FActinN += 2;
           P->GActinN -= 2;
         } else {
-          filament->ElongateTerminalEnd(2.71, filament->GetSpringAxis());
+          AddActin(filament);
           P->FActinN += 1;
           P->GActinN -= 1;
         }
@@ -208,11 +230,12 @@ struct Polymerization : public Behavior {
     } else {
       if ((fKa - LO(filament) > random) && !ZbotOut && (P->GActinN > 1) && TipOk(filament)) {
         if (fKa > P->FArpN){
-          filament->ElongateTerminalEnd(2*2.71, filament->GetSpringAxis());
+          AddActin(filament);
+          AddActin(const_cast<NeuriteElement*>(filament->GetDaughterLeft().Get()));
           P->FActinN += 2;
           P->GActinN -= 2;
         } else {
-          filament->ElongateTerminalEnd(2.71, filament->GetSpringAxis());
+          AddActin(filament);
           P->FActinN += 1;
           P->GActinN -= 1;
         }
@@ -236,9 +259,8 @@ struct Branching : public Behavior {
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
 
     P->Arp_uM = P->GArpN / P->SpyV * (1/P->MOL) * 1e6;
-    int FactinUnits = round(filament->GetLength()/2.71);
     
-    double Fact_Branch_uM = FactinUnits / P->SpyV * (1/P->MOL) * 1e6;
+    double Fact_Branch_uM = 1 / P->SpyV * (1/P->MOL) * 1e6;
     ArpBR = P->Arp_Sc * (P->Arp_uM / 1000 * Fact_Branch_uM);
   }
   
@@ -265,16 +287,27 @@ struct Branching : public Behavior {
     auto random = sim->GetRandom();
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     auto* filament = bdm_static_cast<NeuriteElement*>(agent);
-    if (filament->GetLength() < 2.71) return;
+    if (filament->GetDaughterRight() != nullptr) return;
+    if (filament->GetDaughterLeft()==nullptr) return;
     updateArpBR(filament);
     auto branch_direction = GetNewDirection(filament);
     
     if (ArpBR > random->Uniform(0,1) && P->GActinN > P->ArpAdd) {
-      /*std::cout << filament->GetLength() << std::endl;
-      std::cout << filament->GetActualLength() << std::endl;*/
-      auto event = bdm::neuroscience::NeuriteBranchingEvent(random->Uniform(0,1),P->ArpAdd * 2.71, filament->GetDiameter(), branch_direction);
-      filament->CreateNewAgents(event, {filament,filament});
-      auto branch = bdm_static_cast<NeuriteElement*>(event.new_agents[1]);
+      auto left_daughter = filament->GetDaughterLeft();
+      filament->RemoveDaughter(filament->GetDaughterLeft());
+      filament->Bifurcate(2.71,7,7,filament->GetSpringAxis(),branch_direction);
+      auto ptr = filament->GetDaughterLeft();
+      filament->SetDaughterLeft(left_daughter);
+      ptr.Get()->RemoveFromSimulation();
+      auto branch = const_cast<NeuriteElement*>(filament->GetDaughterRight().Get());
+      for (size_t i = 0; i < P->ArpAdd - 1; i++) {
+        auto perp_vector = branch->GetSpringAxis();
+        branch->Bifurcate(2.71,7,7,branch->GetSpringAxis(),perp_vector);
+        auto ptr = branch->GetDaughterRight();
+        branch->RemoveDaughter(branch->GetDaughterRight());
+        ptr.Get()->RemoveFromSimulation();
+        branch = const_cast<NeuriteElement*>(branch->GetDaughterLeft().Get());
+      }
       P->FArpN+=1;
       P->GArpN-=1;
       P->GActinN-=P->ArpAdd;
@@ -297,22 +330,39 @@ struct Depolymerization : public Behavior {
     auto random = sim->GetRandom();
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     auto* filament = bdm_static_cast<NeuriteElement*>(agent);
-    
-    if (filament->GetDaughterLeft() != nullptr) return;
 
+    if ((filament->GetDaughterLeft() != nullptr)) return;
+    if ((filament->GetDaughterRight() != nullptr)) return;
+    if (filament == nullptr) return;
+    if (filament->GetMother()==nullptr){
+      std::cout << "tlak" << std::endl;
+      return;
+    }
+    if (filament->GetLength()<1) return;
+    
     if (P->fKd > random->Uniform(0,1)) {
-      if (filament->GetLength() < 5.42) {
-        auto mother = dynamic_cast<NeuriteElement*>(filament->GetMother().Get());
-        auto ptr = filament->GetAgentPtr<NeuriteElement>();
-        auto left_daughter = mother->GetDaughterLeft();
-        if (ptr == left_daughter){
-          mother->RemoveDaughter(left_daughter);
-          filament->RemoveFromSimulation();
-          P->GArpN+=1;
-          P->FArpN-=1;
-        }
-      }else {
-        filament->RetractTerminalEnd(2.71);
+      //std::cout << "depoly" << std::endl;
+      //filament->RetractTerminalEnd(7);
+      /*std::cout << filament->GetMother() << std::endl;
+      std::cout << filament->GetUid() << std::endl;
+      std::cout << (dynamic_cast<NeuriteElement*>(filament->GetMother().Get()))->GetDaughterLeft() << std::endl;
+      std::cout << (dynamic_cast<NeuriteElement*>(filament->GetMother().Get()))->GetDaughterRight() << std::endl;
+      std::cout << filament->GetDaughterLeft() << std::endl;
+      std::cout << filament->GetDaughterRight() << std::endl;*/
+      auto mother = dynamic_cast<NeuriteElement*>(filament->GetMother().Get());
+      if (filament->GetAgentPtr<NeuriteElement>() == mother->GetDaughterLeft()) {
+        if (mother->GetDaughterRight() != nullptr) return;
+        mother->RemoveDaughter(filament->GetAgentPtr<NeuriteElement>());
+        filament->RemoveFromSimulation();
+      } else if (filament->GetAgentPtr<NeuriteElement>() == mother->GetDaughterRight()){
+        //std::cout << 2 << std::endl;
+        mother->RemoveDaughter(mother->GetDaughterRight());
+        filament->RemoveFromSimulation();
+        P->GArpN+=1;
+        P->FArpN-=1;
+      } else{
+        std::cout << "PROBLEM" << std::endl;
+        filament->RemoveFromSimulation();
       }
       P->FActinN-=1;
       P->GActinN+=1;
@@ -339,8 +389,51 @@ struct Severing : public Behavior {
     KaCof = (P->dt/Nfillaments * P->Ka_Cofilin * P->Factin_uM * P->Cofilin_uM);
   }
 
+  NeuriteElement* findLastActin(NeuriteElement* filament) {
+    auto next_ptr = filament->GetDaughterLeft();
+    auto next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
+    while (next_ptr != nullptr) {
+      next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
+      if (next_agent->GetDaughterRight() != nullptr) return nullptr;
+      next_ptr = next_agent->GetDaughterLeft();
+    }
+    return next_agent;
+  }
+
+  int removeActin(NeuriteElement* from,NeuriteElement* until) {
+    /*auto agent = from;
+    auto counter = 0;
+    while (agent != until) {
+      auto mother = dynamic_cast<NeuriteElement*>(agent->GetMother().Get());
+      mother->RemoveDaughter(mother->GetDaughterLeft());
+      agent->RemoveFromSimulation();
+      agent = mother;
+      counter++;
+    }
+    return counter;*/
+    auto mother = dynamic_cast<NeuriteElement*>(from->GetMother().Get());
+    std::cout << mother->GetUid() << std::endl;
+    auto ptr = mother->GetDaughterLeft();
+    mother->RemoveDaughter(mother->GetDaughterLeft());
+    ptr.Get()->RemoveFromSimulation();
+    return 1;
+  }
+
+  int getLength(NeuriteElement* filament){
+    auto counter = 0;
+    auto next_ptr = filament->GetDaughterLeft();
+    auto next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
+    while (next_ptr != nullptr) {
+      next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
+      next_ptr = next_agent->GetDaughterLeft();
+      counter++;
+    }
+    auto previous_ptr = filament->GetMother();
+    next_agent = (dynamic_cast<NeuriteElement*>(next_ptr.Get()));
+  }
+
   void Run(Agent* agent) override {
-    //std::cout << "Severing" << std::endl;
+    
     auto* sim = Simulation::GetActive();
     auto random = sim->GetRandom();
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
@@ -348,11 +441,15 @@ struct Severing : public Behavior {
 
     updateKaCof();
 
-    if (filament->GetDaughterLeft()!= nullptr) return;
+    if (filament->GetDaughterLeft() == nullptr) return;
 
-    if (KaCof > random->Uniform(0,1) && filament->GetLength() > 10 * 2.71) {
-      double n_severed_actin = round(random->Uniform(1,filament->GetLength()/2.71));
-      filament->RetractTerminalEnd(n_severed_actin*2.71);
+    if (KaCof > random->Uniform(0,1)) {
+      std::cout << "Severing" << std::endl;
+      auto last_actin = findLastActin(filament);
+      std::cout << "1" << std::endl;
+      if (!last_actin) return;
+      int n_severed_actin = 0;//removeActin(last_actin, filament);
+      std::cout << "2" << std::endl;
       P->FActinN-=n_severed_actin;
       P->GActinN+=n_severed_actin;
     };
@@ -452,7 +549,7 @@ struct Time : public Behavior {
     if ( time_step % 1000 == 0){
       std::cout << "Time step: "<< time_step
       << "  GActin: "<< P->GActinN
-      << "  FActin: "<< P->FActinN
+      << "  FActin: "<< sim->GetResourceManager()->GetNumAgents()-1
       << "  GArpN: "<< P->GArpN
       << "  FArpN: "<< P->FArpN
       << "  TA: "<< P->THYM_ACT_N
@@ -465,6 +562,25 @@ struct Time : public Behavior {
   DiffusionGrid* dg_guide_ = nullptr;
 };
 
+class Filament : public NeuriteElement {
+  BDM_AGENT_HEADER(Filament, NeuriteElement, 1);
+
+ public:
+  Filament() {
+    auto* param = Simulation::GetActive()->GetParam()->Get<neuroscience::Param>();
+    SetTension(param->neurite_default_tension);
+    SetDiameter(param->neurite_default_diameter);
+    SetActualLength(param->neurite_default_actual_length);
+    SetDensity(param->neurite_default_density);
+    SetSpringConstant(param->neurite_default_spring_constant);
+    SetAdherence(param->neurite_default_adherence);
+    SetRestingLength(GetSpringConstant() * GetActualLength() / (GetTension() + GetSpringConstant()));
+    UpdateVolume();
+  }
+  virtual ~Filament() {}
+
+  void RunDiscretization() override{}
+};
 
 inline int Simulate(int argc, const char** argv) {
   neuroscience::InitModule();
@@ -473,20 +589,27 @@ inline int Simulate(int argc, const char** argv) {
   Simulation simulation(argc, argv);
 
   auto* rm = simulation.GetResourceManager();
+  /*auto* myforce = new MyInteractionForce();
+  auto* scheduler = simulation.GetScheduler();
+  auto* op = scheduler->GetOps("mechanical forces")[0];
+  op->GetImplementation<MechanicalForcesOp>()->SetInteractionForce(myforce);*/
   auto* soma = new neuroscience::NeuronSoma();
   soma->SetDiameter(10);
   soma->AddBehavior(new Time());
-  auto*neurite = soma->ExtendNewNeurite({0,0,1});
+  auto fill = new Filament();
+  auto*neurite = soma->ExtendNewNeurite({0,0,1},fill);
+  neurite->SetStaticnessNextTimestep(true);
+  neurite->SetPropagateStaticness(true);
+  neurite->SetAdherence(20000);
   neurite->AddBehavior(new Polymerization());
   neurite->AddBehavior(new Branching());
   neurite->AddBehavior(new Depolymerization());
-  neurite->AddBehavior(new Severing());
-  neurite->AddBehavior(new Thymosin());
+  //neurite->AddBehavior(new Severing());
+  //neurite->AddBehavior(new Thymosin());
   rm->AddAgent(soma);
-  auto* P = const_cast<Param*>(simulation.GetParam())->Get<SimParam>();
   
   // Run simulation for one timestep
-  simulation.GetScheduler()->Simulate(80000);
+  simulation.GetScheduler()->Simulate(20000);
   
   std::cout << "Simulation completed successfully!" << std::endl;
   return 0;
