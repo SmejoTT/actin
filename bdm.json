@@ -11,6 +11,9 @@
         "simulation_time_step": 1,
         "visualization_interval": 1000,
         "thread_safety_mechanism": 1,
+        "unschedule_default_operations": [
+            "mechanical forces"
+        ],
         "visualize_agents": {
             "NeuriteElement": [],
             "NeuronSoma": [],

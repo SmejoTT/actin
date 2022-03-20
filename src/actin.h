@@ -390,50 +390,52 @@ struct Severing : public Behavior {
   }
 
   NeuriteElement* findLastActin(NeuriteElement* filament) {
-    auto next_ptr = filament->GetDaughterLeft();
-    auto next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
-    while (next_ptr != nullptr) {
-      next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
-      if (next_agent->GetDaughterRight() != nullptr) return nullptr;
-      next_ptr = next_agent->GetDaughterLeft();
+    auto current_ptr = filament->GetAgentPtr<NeuriteElement>();
+    while (current_ptr->GetDaughterLeft() != nullptr) { 
+      current_ptr = current_ptr->GetDaughterLeft(); 
     }
-    return next_agent;
+    return current_ptr.Get();
   }
 
-  int removeActin(NeuriteElement* from,NeuriteElement* until) {
-    /*auto agent = from;
-    auto counter = 0;
-    while (agent != until) {
-      auto mother = dynamic_cast<NeuriteElement*>(agent->GetMother().Get());
-      mother->RemoveDaughter(mother->GetDaughterLeft());
-      agent->RemoveFromSimulation();
-      agent = mother;
-      counter++;
-    }
-    return counter;*/
-    auto mother = dynamic_cast<NeuriteElement*>(from->GetMother().Get());
-    std::cout << mother->GetUid() << std::endl;
-    auto ptr = mother->GetDaughterLeft();
+  void removeActin(std::vector<NeuriteElement*> vect) {
+    std::cout << "SEVERING" << std::endl;
+    auto mother = dynamic_cast<NeuriteElement*>(vect[9]->GetMother().Get());
     mother->RemoveDaughter(mother->GetDaughterLeft());
-    ptr.Get()->RemoveFromSimulation();
-    return 1;
-  }
-
-  int getLength(NeuriteElement* filament){
+    auto* sim= Simulation::GetActive();
     auto counter = 0;
-    auto next_ptr = filament->GetDaughterLeft();
-    auto next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
-    while (next_ptr != nullptr) {
-      next_agent = const_cast<NeuriteElement*>(next_ptr.Get());
-      next_ptr = next_agent->GetDaughterLeft();
+    for(std::size_t i = 0; i < 10; ++i) {
+      vect[i]->RemoveFromSimulation();
       counter++;
     }
-    auto previous_ptr = filament->GetMother();
-    next_agent = (dynamic_cast<NeuriteElement*>(next_ptr.Get()));
+    std::cout << sim->GetScheduler()->GetSimulatedSteps()<<  " " << counter << std::endl;
+    /*for(const auto& value: vect) {
+      value->RemoveFromSimulation();
+    }*/
+  }
+
+  std::vector<NeuriteElement*> getLength(NeuriteElement* filament){
+    std::vector<NeuriteElement*> vect;
+    /*auto current_ptr = filament->GetAgentPtr<NeuriteElement>();
+    while (current_ptr->GetDaughterLeft() != nullptr) { 
+      if (current_ptr->GetDaughterRight() != nullptr) return {};
+      vect.push_back(current_ptr);
+      current_ptr = current_ptr->GetDaughterLeft(); 
+    }*/
+    auto mother_ptr = filament->GetMother();
+    if (mother_ptr->IsNeuronSoma()) return {};
+    auto mother = dynamic_cast<NeuriteElement*>(mother_ptr.Get());
+    while (mother->GetDaughterRight() != filament->GetAgentPtr<NeuriteElement>()) { 
+      if (mother->GetDaughterRight() != nullptr) return vect;
+      vect.push_back(filament);
+      filament = mother;
+      mother_ptr = mother->GetMother();
+      if (mother_ptr->IsNeuronSoma()) return vect;
+      mother = dynamic_cast<NeuriteElement*>(mother_ptr.Get());
+    }
+    return vect;
   }
 
   void Run(Agent* agent) override {
-    
     auto* sim = Simulation::GetActive();
     auto random = sim->GetRandom();
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
@@ -441,20 +443,19 @@ struct Severing : public Behavior {
 
     updateKaCof();
 
-    if (filament->GetDaughterLeft() == nullptr) return;
+    if (filament->GetDaughterLeft() != nullptr) return;
 
-    if (KaCof > random->Uniform(0,1)) {
-      std::cout << "Severing" << std::endl;
-      auto last_actin = findLastActin(filament);
-      std::cout << "1" << std::endl;
-      if (!last_actin) return;
-      int n_severed_actin = 0;//removeActin(last_actin, filament);
-      std::cout << "2" << std::endl;
-      P->FActinN-=n_severed_actin;
-      P->GActinN+=n_severed_actin;
+    auto agents_to_delete =  getLength(filament);
+
+    if (KaCof > random->Uniform(0,1) && agents_to_delete.size() > 9) {
+      std::cout << sim->GetResourceManager()->GetNumAgents() << std::endl;
+      
+      removeActin(agents_to_delete);
+      std::cout << sim->GetResourceManager()->GetNumAgents() << std::endl;
+      P->FActinN-= agents_to_delete.size();
+      P->GActinN+= agents_to_delete.size();
     };
   }
-
  private:
   bool init_ = false;
   DiffusionGrid* dg_guide_ = nullptr;
@@ -598,13 +599,13 @@ inline int Simulate(int argc, const char** argv) {
   soma->AddBehavior(new Time());
   auto fill = new Filament();
   auto*neurite = soma->ExtendNewNeurite({0,0,1},fill);
-  neurite->SetStaticnessNextTimestep(true);
-  neurite->SetPropagateStaticness(true);
+  //neurite->SetStaticnessNextTimestep(true);
+  //neurite->SetPropagateStaticness(true);
   neurite->SetAdherence(20000);
   neurite->AddBehavior(new Polymerization());
   neurite->AddBehavior(new Branching());
   neurite->AddBehavior(new Depolymerization());
-  //neurite->AddBehavior(new Severing());
+  neurite->AddBehavior(new Severing());
   //neurite->AddBehavior(new Thymosin());
   rm->AddAgent(soma);
   
