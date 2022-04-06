@@ -38,26 +38,6 @@ class Filament : public NeuriteElement {
   virtual ~Filament() {}
 
   void RunDiscretization() override{}
-  
-  /*void CriticalRegion(std::vector<AgentUid>* uids) override {
-    //std::cout << Simulation::GetActive()->GetScheduler()->GetSimulatedSteps() << std::endl;
-    uids->reserve(4);
-    uids->push_back(GetUid());
-    uids->push_back(GetMother().GetUid());
-    if (GetDaughterLeft() != nullptr) {
-      uids->push_back(GetDaughterLeft().GetUid());
-      auto current = GetDaughterLeft()->GetDaughterLeft();
-      auto counter = 0;
-      while(current != nullptr && counter < 12){
-        uids->push_back(current.GetUid());
-        current = current->GetDaughterLeft();
-        counter++;
-      }
-    }
-    if (GetDaughterRight() != nullptr) {
-      uids->push_back(GetDaughterLeft().GetUid());
-    }
- }*/
 
  void SetDeath() {
    is_dead = true;
@@ -67,15 +47,24 @@ class Filament : public NeuriteElement {
    return is_dead;
  }
 
- void SetDepoly(bool value) {
-   was_depoly = value;
+ void SetDepoly() {
+   was_depoly = true;
  }
 
  bool WasDepoly() {
    return was_depoly;
  }
 
+ void SetArpBound() {
+   arp_bound = true;
+ }
+
+ bool IsArpBound(){
+   return arp_bound;
+ }
+
  private:
+  bool arp_bound = false;
   bool is_dead = false;
   bool was_depoly = false;
 };
@@ -124,7 +113,7 @@ struct SimParam : public ParamGroup {
   double SPYheadRad = SPYheadX/2;
   double Vneck = Math::kPi * pow(SPYneckRad,2) * SPYheadZS;
   double Vhead = Math::kPi * pow(SPYheadRad,2) * (SPYheadZN-SPYheadZS);
-  double SpyV = (Vneck+Vhead) * 1e-24;
+  double SpyV = 1e-16;// (Vneck+Vhead) * 1e-24;
   
   // Actin
   double MOL = 6.022e23; 
@@ -251,11 +240,15 @@ struct Polymerization : public Behavior {
   }
 
   void AddActin(NeuriteElement* filament){
+    auto* sim = Simulation::GetActive();
+    auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     auto perp_vector = filament->GetSpringAxis();
     filament->Bifurcate(2.71,7,7,filament->GetSpringAxis(),perp_vector);
     auto ptr = filament->GetDaughterRight();
     filament->RemoveDaughter(filament->GetDaughterRight());
     ptr.Get()->RemoveFromSimulation();
+    P->FActinN += 1;
+    P->GActinN -= 1;
   }
 
   void Run(Agent* agent) override {
@@ -264,38 +257,30 @@ struct Polymerization : public Behavior {
     auto random = sim->GetRandom()->Uniform(0,1);
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     
-    fKaUpdate();
     auto* filament = static_cast<Filament*>(agent);
     if (filament->IsDead()) return;
+    if (filament->GetDaughterLeft()!= nullptr) return;
+    
+    fKaUpdate();
     auto ZbotOut = filament->DistalEnd()[2] < 0;
 
-    if (filament->GetDaughterLeft()!= nullptr) return;
-
-    if (sim->GetScheduler()->GetSimulatedSteps() < P->ACTearly){
+    if (int(sim->GetScheduler()->GetSimulatedSteps()) < P->ACTearly){
       //std::cout << "early" << std::endl;
-      if (fKa > random && TipOk(filament) && (P->GActinN>11) && TipOk(filament)){//((19580 - (int)sim->GetResourceManager()->GetNumAgents()))>11){//P->GActinN > 1)){
-        if (fKa > P->FArpN && P->GActinN > 12){//((19580 - (int)sim->GetResourceManager()->GetNumAgents()))>12){
+      if (fKa > random && TipOk(filament) && (P->GActinN>1) && TipOk(filament)){//((19580 - (int)sim->GetResourceManager()->GetNumAgents()))>11){//P->GActinN > 1)){
+        if (fKa > P->FArpN && P->GActinN > 2){//((19580 - (int)sim->GetResourceManager()->GetNumAgents()))>12){
           AddActin(filament);
           AddActin(const_cast<NeuriteElement*>(filament->GetDaughterLeft().Get()));
-          P->FActinN += 2;
-          P->GActinN -= 2;
         } else {
           AddActin(filament);
-          P->FActinN += 1;
-          P->GActinN -= 1;
         }
       }
     } else {
-      if ((fKa - LO(filament) > random) && !ZbotOut && (P->GActinN>11) && TipOk(filament)) {//((19580 - (int)sim->GetResourceManager()->GetNumAgents())>11) && TipOk(filament)) {
-        if (fKa > P->FArpN && P->GActinN > 12){//((19580 - (int)sim->GetResourceManager()->GetNumAgents()))>12){
+      if ((fKa - LO(filament) > random) && !ZbotOut && (P->GActinN>1)) {//((19580 - (int)sim->GetResourceManager()->GetNumAgents())>11) && TipOk(filament)) {
+        if (fKa > P->FArpN && P->GActinN > 2){//((19580 - (int)sim->GetResourceManager()->GetNumAgents()))>12){
           AddActin(filament);
           AddActin(const_cast<NeuriteElement*>(filament->GetDaughterLeft().Get()));
-          P->FActinN += 2;
-          P->GActinN -= 2;
         } else {
           AddActin(filament);
-          P->FActinN += 1;
-          P->GActinN -= 1;
         }
       } 
     }
@@ -349,25 +334,27 @@ struct Branching : public Behavior {
     
     if (filament->GetDaughterRight() != nullptr) return;
     if (filament->GetDaughterLeft()==nullptr) return;
-    updateArpBR(filament);
     if (filament->IsDead()) return;
+    updateArpBR(filament);
+    
     auto branch_direction = GetNewDirection(filament);
     
-    if (ArpBR > random->Uniform(0,1) &&  P->GActinN > P->ArpAdd+10) {//(19580 - (int)sim->GetResourceManager()->GetNumAgents()) > P->ArpAdd+10) {
+    if (ArpBR > random->Uniform(0,1) &&  P->GActinN > P->ArpAdd) {//(19580 - (int)sim->GetResourceManager()->GetNumAgents()) > P->ArpAdd+10) {
       auto left_daughter = filament->GetDaughterLeft();
       filament->RemoveDaughter(filament->GetDaughterLeft());
       filament->Bifurcate(2.71,7,7,filament->GetSpringAxis(),branch_direction);
       auto ptr = filament->GetDaughterLeft();
       filament->SetDaughterLeft(left_daughter);
       ptr.Get()->RemoveFromSimulation();
-      auto branch = const_cast<NeuriteElement*>(filament->GetDaughterRight().Get());
+      auto branch = bdm_static_cast<Filament*>(const_cast<NeuriteElement*>(filament->GetDaughterRight().Get()));
+      branch->SetArpBound();
       for (size_t i = 0; i < P->ArpAdd - 1; i++) {
         auto perp_vector = branch->GetSpringAxis();
         branch->Bifurcate(2.71,7,7,branch->GetSpringAxis(),perp_vector);
         auto ptr = branch->GetDaughterRight();
         branch->RemoveDaughter(branch->GetDaughterRight());
         ptr.Get()->RemoveFromSimulation();
-        branch = const_cast<NeuriteElement*>(branch->GetDaughterLeft().Get());
+        branch = bdm_static_cast<Filament*>(const_cast<NeuriteElement*>(branch->GetDaughterLeft().Get()));
       }
       P->FArpN+=1;
       P->GArpN-=1;
@@ -391,19 +378,16 @@ struct Depolymerization : public Behavior {
     auto random = sim->GetRandom();
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     auto* filament = bdm_static_cast<Filament*>(agent);
-    filament->SetDepoly(false);
     if (filament->IsDead()) return;
     if ((filament->GetDaughterLeft() != nullptr)) return;
     if ((filament->GetDaughterRight() != nullptr)) return;
     if (filament == nullptr) return;
-    if (filament->GetMother()==nullptr){
-      std::cout << "tlak" << std::endl;
-      return;
-    }
+    if (filament->GetMother()==nullptr) return;
+    
     if (filament->GetLength()<1) return;
     
     if (P->fKd > random->Uniform(0,1)) {
-      filament->SetDepoly(true);
+      filament->SetDepoly();
       auto mother = dynamic_cast<NeuriteElement*>(filament->GetMother().Get());
       if (filament->GetAgentPtr<NeuriteElement>() == mother->GetDaughterLeft()) {
         if (mother->GetDaughterRight() != nullptr) return;
@@ -444,19 +428,21 @@ struct Severing : public Behavior {
     KaCof = (P->dt/Nfillaments * P->Ka_Cofilin * P->Factin_uM * P->Cofilin_uM);
   }
 
-  NeuriteElement* findLastActin(NeuriteElement* filament) {
-    auto current_ptr = filament->GetAgentPtr<NeuriteElement>();
-    while (current_ptr->GetDaughterLeft() != nullptr) { 
-      current_ptr = current_ptr->GetDaughterLeft(); 
-    }
-    return current_ptr.Get();
-  }
-
   void removeActin(std::vector<Filament*> vect) {
     //std::cout << "SEVERING" << std::endl;
-    auto mother = bdm_static_cast<NeuriteElement*>(vect[9]->GetMother().Get());
-    mother->RemoveDaughter(mother->GetDaughterLeft());
-    for(std::size_t i = 0; i < 10; ++i) {
+    auto* sim = Simulation::GetActive();
+    auto random = sim->GetRandom();
+    int index = floor(random->Uniform(9,vect.size()-0.1));
+    /*std::cout << index << std::endl;
+    std::cout << "len " << vect.size() << std::endl;*/
+    auto mother = bdm_static_cast<NeuriteElement*>(vect[index-2]->GetMother().Get());
+    if (vect[index-2]->GetAgentPtr<NeuriteElement>() == mother->GetDaughterLeft()){
+      mother->RemoveDaughter(mother->GetDaughterLeft());
+    } else {
+      mother->RemoveDaughter(mother->GetDaughterRight());
+    }
+    
+    for(int i = 0; i <  index-1; ++i) {
       vect[i]->SetDeath();
     }
   }
@@ -489,12 +475,10 @@ struct Severing : public Behavior {
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     auto* filament = bdm_static_cast<Filament*>(agent);
 
-    updateKaCof();
     if (filament->IsDead()) return;
     if (filament->WasDepoly()) return;
-
     if (filament->GetDaughterLeft() != nullptr) return;
-
+    updateKaCof();
     auto agents_to_delete =  getLength(filament);
 
     if (KaCof > random->Uniform(0,1) && agents_to_delete.size() > 9) {
@@ -531,9 +515,9 @@ struct Thymosin : public Behavior {
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     auto* filament = bdm_static_cast<NeuriteElement*>(agent);
     int time_step = sim->GetScheduler()->GetSimulatedSteps();
-    
+    if (time_step % 3 != 0) return;
     updateThymosinRates();
-
+    
     if (time_step > P->ThymTimeStart){
       if ((tKa > random->Uniform(0,1)) && (P->GActinN>1) && (P->THYM_N>1)){
           P->THYM_N = P->THYM_N - 1;
@@ -546,8 +530,7 @@ struct Thymosin : public Behavior {
           P->GActinN = P->GActinN + 1;
       }
     }
-    
-}
+  }
 
  private:
   bool init_ = false;
@@ -570,7 +553,6 @@ struct Death : public Behavior {
       P->FActinN = P->FActinN - 1;
       P->GActinN = P->GActinN + 1;
     }  
-    
   }
 
  private:
@@ -578,44 +560,51 @@ struct Death : public Behavior {
   DiffusionGrid* dg_guide_ = nullptr;
 };
 
-struct Time : public Behavior {
-  BDM_BEHAVIOR_HEADER(Time, Behavior, 1);
-  Time() { NeverCopyToNew(); }
-  virtual ~Time() {}
+struct LTP : public StandaloneOperationImpl {
+  BDM_OP_HEADER(LTP);
+  
   double PctTeq;
   double PctTAeq;
- 
-  void Run(Agent* agent) override {
+  int counter = 0;
+
+  void operator()() override {
     auto* sim = Simulation::GetActive();
+    auto* rm = sim->GetResourceManager();
+
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     int time_step = sim->GetScheduler()->GetSimulatedSteps();
 
-
+    
     if (time_step == P->LTPon){
-      int TAeq = P->THYM_ACT_N;
-      int Teq = P->THYM_N;
-      double PctTeq = Teq / (TAeq + Teq);
-      double PctTAeq = TAeq / (TAeq + Teq);
+      double TAeq = P->THYM_ACT_N;
+      double Teq = P->THYM_N;
+      PctTeq = Teq / (TAeq + Teq);
+      PctTAeq = TAeq / (TAeq + Teq);
+      
       P->Ka_Thymosin = P->Ka_Thymosin_LTP;
       P->Kd_Thymosin = P->Kd_Thymosin_LTP;
     }
     
     if (time_step > P->LTPon && time_step < P->LTPoff){
+      counter++;
       int NrepT = round(P->THYM_N * P->THYM_D);
       int NrepTA = round(P->THYM_ACT_N * P->THYM_D);
       int NrepTAT = NrepT + NrepTA;
-
-      P->THYM_N += -NrepT + round(PctTeq*NrepTAT);
-      P->THYM_ACT_N += -NrepTA + round(PctTAeq*NrepTAT);
       
+      P->THYM_N = P->THYM_N - NrepT + round(PctTeq*NrepTAT);
+      P->THYM_ACT_N = P->THYM_ACT_N - NrepTA + round(PctTAeq*NrepTAT);
+      
+      //P->GActinN = P->GActinN + NrepTA - round(PctTAeq*NrepTAT);
+
       P->TOTAL_ACTIN = P->GActinN + P->FActinN + P->THYM_ACT_N;
+      //std::cout << counter <<std::endl;
     }
 
     if (time_step == P->LTPoff){
       P->Ka_Thymosin = 0.08;
       P->Kd_Thymosin = 0.04;
     }
-
+    
     if ( time_step % 1000 == 0){
       std::cout << (19580 - (int)sim->GetResourceManager()->GetNumAgents()) + sim->GetResourceManager()->GetNumAgents()-1 << " " <<"Time step: "<< time_step
       << "  GActin: "<< P->GActinN << " " << (19580 - (int)sim->GetResourceManager()->GetNumAgents())
@@ -625,11 +614,8 @@ struct Time : public Behavior {
       << "  TA: "<< P->THYM_ACT_N
       << "  T: "<< P->THYM_N << std::endl;
     }
+    
   }
-
- private:
-  bool init_ = false;
-  DiffusionGrid* dg_guide_ = nullptr;
 };
 
 inline void SetupResultCollection(Simulation* sim) {
@@ -641,11 +627,40 @@ inline void SetupResultCollection(Simulation* sim) {
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     return P->GActinN;
   };
-  auto branch = [](Agent* a) {
-    return bdm_static_cast<Filament*>(a);
+  auto branch = [] (Simulation* sim) {
+    auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
+    return P->FArpN;  
   };
+
+  auto arp = [](Simulation* sim) {
+    auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
+    return P->GArpN;  
+  };
+
+  auto branch_rate = [](Simulation* sim) {
+    auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
+    P->Arp_uM = P->GArpN / P->SpyV * (1/P->MOL) * 1e6;
+    double Fact_Branch_uM = P->Factin_uM;
+    auto ArpBR = P->Arp_Sc * (P->Arp_uM / 1000 * Fact_Branch_uM);
+    return ArpBR;  
+  };
+
+  auto thym_actin = [](Simulation* sim) {
+    auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
+    return P->THYM_ACT_N;  
+  };
+  auto thym = [](Simulation* sim) {
+    auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
+    return P->THYM_N;  
+  };
+
   ts->AddCollector("num-agents",get_num_agents);
   ts->AddCollector("gactin", gactin);
+  ts->AddCollector("branch", branch);
+  ts->AddCollector("arp", arp);
+  //ts->AddCollector("branch_rate",branch_rate);
+  ts->AddCollector("thym_actin", thym_actin);
+  ts->AddCollector("thym",thym);
 }
 
 
@@ -658,9 +673,15 @@ inline int Simulate(int argc, const char** argv) {
   simulation.SetResourceManager(rand_rm);
 
   auto* rm = simulation.GetResourceManager();
+
+  OperationRegistry::GetInstance()->AddOperationImpl(
+      "LTP", OpComputeTarget::kCpu, new LTP());
+  auto* update_op = NewOperation("LTP");
+  simulation.GetScheduler()->ScheduleOp(update_op, OpType::kPreSchedule);
+
   auto* soma = new Counter();
   soma->SetDiameter(10);
-  soma->AddBehavior(new Time());
+  //soma->AddBehavior(new Time());
   auto fill = new Filament();
   auto*neurite = soma->ExtendNewNeurite({0,0,1},fill);
   //neurite->SetStaticnessNextTimestep(true);
@@ -676,11 +697,15 @@ inline int Simulate(int argc, const char** argv) {
 
   SetupResultCollection(&simulation);
   // Run simulation for one timestep
-  simulation.GetScheduler()->Simulate(20000);
-  simulation.GetTimeSeries()->SaveJson("data_sim.json");
+  using namespace std::chrono;
+  auto start = high_resolution_clock::now();
+  simulation.GetScheduler()->Simulate(80000);
+  auto stop = high_resolution_clock::now();
+  auto duration = duration_cast<minutes>(stop - start);
+  std::cout << duration.count() << std::endl;
+  simulation.GetTimeSeries()->SaveJson("data_sim2.json");
   LineGraph g(simulation.GetTimeSeries(), "My result", "Time", "Number of agents", true, nullptr, 500, 300);
-  g.Add("num-agents", "Number of Agents");
-  g.Add("gactin","Gactin");
+  //g.Add("num-agents", "Number of Agents");
   g.SaveAs("graph",{".png"});
   std::cout << "Simulation completed successfully!" << std::endl;
   return 0;
