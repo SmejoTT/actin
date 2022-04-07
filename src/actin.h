@@ -515,7 +515,7 @@ struct Thymosin : public Behavior {
     auto* P = const_cast<Param*>(sim->GetParam())->Get<SimParam>();
     auto* filament = bdm_static_cast<NeuriteElement*>(agent);
     int time_step = sim->GetScheduler()->GetSimulatedSteps();
-    if (time_step % 3 != 0) return;
+    if (time_step % 4 != 0) return;
     updateThymosinRates();
     
     if (time_step > P->ThymTimeStart){
@@ -703,7 +703,7 @@ inline int Simulate(int argc, const char** argv) {
   auto stop = high_resolution_clock::now();
   auto duration = duration_cast<minutes>(stop - start);
   std::cout << duration.count() << std::endl;
-  simulation.GetTimeSeries()->SaveJson("data_sim2.json");
+  simulation.GetTimeSeries()->SaveJson("data_sim3.json");
   LineGraph g(simulation.GetTimeSeries(), "My result", "Time", "Number of agents", true, nullptr, 500, 300);
   //g.Add("num-agents", "Number of Agents");
   g.SaveAs("graph",{".png"});

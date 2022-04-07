@@ -1,11 +1,40 @@
-from audioop import avg
 import json
 import matplotlib.pyplot as plt
 import numpy as np
 from PIL import Image
+import scipy.io as sio
+
+def make_figure(name,x,ysMy,ysMonk,title,label1,label2,pos):
+    fig, ax = plt.subplots(nrows=1,ncols=2,figsize=(6,4),sharey=True)
+    for i in range(len(ysMy)):
+        if i == 0:
+            ax[0].plot(x, ysMy[i], color='r',linewidth=2.5,label=label1)
+        else:
+            ax[0].plot(x, ysMy[i], color='b',linewidth=2.5,label=label2)
+    for i in range(len(ysMonk)):
+        if i == 0:
+            ax[1].plot(x, ysMonk[i], color='r',linewidth=2.5,label=label1)
+        else:
+            ax[1].plot(x, ysMonk[i], color='b',linewidth=2.5,label=label2)
+    ax[0].set(xlabel='time (min)', ylabel='particle count', title='My implementation')
+    ax[1].set(xlabel='time (min)', title="Monk's implementation")
+    
+    for i in range(2):
+        ax[i].set_xticks(range(0,81,10))
+        ax[i].spines['top'].set_visible(False)
+        ax[i].spines['right'].set_visible(False)
+        #ax[i].axvline(x=43,linestyle='--',c='orange',label="LTP end")
+        #ax[i].axvline(x=40,linestyle='--',c='g',label='LTP start')
+        ax[i].set_ylim(bottom=0)
+        ax[i].set_xlim(left=0,right=80)
+    ax[0].legend(loc=pos)
+    plt.rcParams['font.size'] = 9
+    plt.tight_layout()
+    plt.savefig(f'fig_{name}.pdf')
+    plt.show()
 
 # Opening JSON file
-f = open('data_sim2.json')
+f = open('data_sim.json')
  
 # returns JSON object as
 # a dictionary
@@ -35,30 +64,8 @@ for d in data['data_']:
 
 X[:] = [x / 1000 for x in X]
 
-def make_figure(xs,ys,name,label1,label2,image_file):
-    fig, ax = plt.subplots(nrows=1,ncols=1,figsize=(6,4))
-    for i in range(len(xs)):
-        if i == 0:
-            ax.plot(xs[i], ys[i], color='r',linewidth=2.5,label=label1)
-        else:
-            ax.plot(xs[i], ys[i], color='b',linewidth=2.5,label=label2)
-    ax.set(xlabel='time (min)', ylabel='particle count', title=name)
-    ax.ticklabel_format(axis="y", style="sci", scilimits=(0,0))
-    ax.set_xticks(range(0,81,10))
-    ax.spines['top'].set_visible(False)
-    ax.spines['right'].set_visible(False)
-    ax.legend(loc='upper left')
-    ax.set_ylim(bottom=0)
-    ax.set_xlim(left=0,right=80)
-    #ax.set_clip_on(False)
-    #img = Image.open(image_file)
-    #ax[1].axis('off')
-    #ax[1] = plt.imshow(img,aspect='auto')
-    plt.rcParams['font.size'] = 9
-    plt.tight_layout()
-    plt.savefig(f'fig_{name}.pdf')
-    plt.show()
-print(np.average(branchY))
-make_figure([X,X],[factinY,gactinY], 'G-actin vs F-actin','F-actin','G-actin','actin.tif')
-make_figure([X,X],[branchY,arpY], 'Free Arp vs Bound Arp','Bound Arp2/3','Free Arp2/3','arp.tif')
-make_figure([X,X],[thymY,thymActY], 'Thymosin vs Thymosin-Actin','Thymosin','Thymosin-Actin','thym.tif')
+BradData = sio.loadmat('ActinData.mat')['ActinData'][0][0]
+print(BradData)
+make_figure("actin",X,[factinY,gactinY],[np.transpose(BradData[7]),np.transpose(BradData[8])] ,True,'F-actin','G-actin','upper left')
+make_figure("arp",X,[branchY,arpY],[np.transpose(BradData[16]),np.transpose(BradData[17])] ,False,'Bound Arp2/3','Free Arp2/3','center right')
+make_figure("thymosin",X,[thymY,thymActY],[np.transpose(BradData[21]),np.transpose(BradData[22])] ,True,'Thymosin','Thymosin-Actin','lower center')
